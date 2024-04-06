@@ -29,7 +29,7 @@ class Filter implements Cloneable {
     }
 
     public String toString(){
-        return "Filter " + patters.collect{ it.toString() }.join( "," )
+        return "Filter " + patterns.collect{ it.toString() }.join( "," )
     }
 
     public boolean asBoolean(){
