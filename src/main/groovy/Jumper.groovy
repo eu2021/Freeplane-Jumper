@@ -3,6 +3,8 @@ package lilive.jumper
 import groovy.json.JsonOutput
 import groovy.json.JsonGenerator
 import groovy.json.JsonSlurper
+
+import javax.swing.SwingWorker
 import java.awt.Rectangle
 import org.freeplane.api.Node
 import org.freeplane.plugin.script.proxy.Proxy
@@ -20,6 +22,10 @@ import lilive.jumper.display.windows.Gui
 import lilive.jumper.utils.LogUtils
 import javax.swing.SwingUtilities
 import org.freeplane.core.ui.components.UITools
+
+import java.beans.PropertyChangeEvent
+import java.beans.PropertyChangeListener
+import java.beans.PropertyChangeSupport
 
 /**
  * The main class that control the application.
@@ -74,7 +80,11 @@ class Jumper implements SearchResultsCollector {
     private static Jumper instance
     public static Jumper get(){ return instance }
 
-    
+    // For the headless call
+    public boolean searchInProgress = false
+    private final PropertyChangeSupport pcs = new PropertyChangeSupport(this)
+
+
     
     //////////////////////////////////////////////////////////////////
     // Main public functions /////////////////////////////////////////
@@ -90,6 +100,24 @@ class Jumper implements SearchResultsCollector {
         instance.init()
     }
 
+    public static startHeadlessCall(String searchTerms){
+        if( instance ) {
+            if(searchTerms == instance.searchPattern) {return}
+            instance.setSearchPattern(searchTerms)
+            return
+        }
+        instance = new Jumper()
+        instance.initHeadlessCall()
+        instance.setSearchPattern(searchTerms)
+        return
+    }
+
+    public static ArrayList retrieveResultsAsNodeProxyList(){
+        def resultsAsNodes = []
+        instance.results.each{resultsAsNodes.add(it.node)}
+        return resultsAsNodes
+    }
+
     // Jump to the user selected node (if any) and close the GUI
     public void end(){
         searchEngine.turnOff()
@@ -97,6 +125,11 @@ class Jumper implements SearchResultsCollector {
         gui.dispose()
         if( jumpToNode ) selectMapNode( jumpToNode )
         else selectMapNode( initialNode )
+        instance = null
+    }
+
+    public void headlessEnd(){
+        searchEngine.turnOff()
         instance = null
     }
 
@@ -324,20 +357,33 @@ class Jumper implements SearchResultsCollector {
 
     public void onSearchStarted( boolean unfiltered ){
         results.clear()
-        gui.clearResults()
-        if( ! unfiltered ) gui.displaySearchInProgressMessage()
+        instance.setSearchInProgress(true)
+        try {
+            gui.clearResults()
+            if (!unfiltered) gui.displaySearchInProgressMessage()
+        }
+        catch (Exception e) {}
     }
 
     public void addResults( List<SNode> newResults, boolean unfiltered, boolean done ){
         results.addAll( newResults )
-        gui.addResults( newResults, candidates.size(), unfiltered, ! done )
+        try {
+            gui.addResults(newResults, candidates.size(), unfiltered, !done)
+        }
+        catch (Exception e) {
+        }
     }
 
     public void onSearchCompleted( boolean unfiltered, boolean maxReached ){
-        gui.onSearchCompleted( candidates.size(), unfiltered, maxReached )
+        instance.setSearchInProgress(false)
+        try {gui.onSearchCompleted( candidates.size(), unfiltered, maxReached )
         selectDefaultResult()
     }
-    
+        catch (Exception e) {
+        }
+    }
+
+
     
     //////////////////////////////////////////////////////////////////
     // Private functions /////////////////////////////////////////////
@@ -384,6 +430,41 @@ class Jumper implements SearchResultsCollector {
         updateCandidates()
         searchEngine.turnOn( this )
         gui = new Gui( loadedSettings, { onGUIReady() } )
+    }
+
+    private void initHeadlessCall(){
+
+        LogUtils.init()
+
+        /* Development only feature.
+         Throw java.security.AccessControlException  when used in
+         packaged addon. Probably because this is shared with
+         Freeplane.
+        Thread.setDefaultUncaughtExceptionHandler(
+            new Thread.UncaughtExceptionHandler(){
+                @Override
+                public void uncaughtException( Thread t, Throwable e ){
+                    LogUtils.warn( "Error: ${e}")
+                    UITools.informationMessage( "Sorry ! Jumper internal error.")
+                    end()
+                }
+            }
+        )*/
+
+        initialNode = ScriptUtils.node()
+        c = ScriptUtils.c()
+
+        sMap = new SMap( initialNode.map.root )
+        initialSNode = sMap.find{ it.node == initialNode }
+
+        candidates = new SNodes()
+        results = new SNodes()
+        searchEngine = new SearchEngine()
+
+        loadedSettings = loadSettings()
+
+        updateCandidates()
+        searchEngine.turnOn( this )
     }
 
     /**
@@ -636,5 +717,29 @@ class Jumper implements SearchResultsCollector {
             end()
         }
     }
-    
+
+    //////////////////////////////////////////////////////////////////
+// Property change listener functions /////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////
+
+    void addPropertyChangeListener(PropertyChangeListener listener) {
+        pcs.addPropertyChangeListener(listener)
+    }
+
+    void removePropertyChangeListener(PropertyChangeListener listener) {
+        pcs.removePropertyChangeListener(listener)
+    }
+
+    boolean getSearchInProgress() {
+        return searchInProgress
+    }
+
+    public void setSearchInProgress(boolean val) {
+        boolean oldVal = this.searchInProgress
+        this.searchInProgress = val
+        this.pcs.firePropertyChange("searchInProgress", oldVal, val)
+    }
+
 }
+
+
